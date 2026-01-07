@@ -1,0 +1,299 @@
+{% extends "base.html" %}
+
+{% block title %}Select Face - FaceID{% endblock %}
+
+{% block head %}
+<style>
+    .photo-container {
+        position: relative;
+        display: inline-block;
+        max-width: 100%;
+        cursor: crosshair;
+    }
+    .photo-container img {
+        max-width: 100%;
+        max-height: 70vh;
+        user-select: none;
+        -webkit-user-drag: none;
+    }
+    .bbox {
+        position: absolute;
+        border: 3px solid #00ff00;
+        background: rgba(0, 255, 0, 0.1);
+        cursor: move;
+    }
+    .bbox .resize-handle {
+        position: absolute;
+        width: 14px;
+        height: 14px;
+        background: #00ff00;
+        border: 2px solid #fff;
+        border-radius: 2px;
+    }
+    .resize-handle.nw { top: -7px; left: -7px; cursor: nw-resize; }
+    .resize-handle.ne { top: -7px; right: -7px; cursor: ne-resize; }
+    .resize-handle.sw { bottom: -7px; left: -7px; cursor: sw-resize; }
+    .resize-handle.se { bottom: -7px; right: -7px; cursor: se-resize; }
+    .resize-handle.n { top: -7px; left: 50%; transform: translateX(-50%); cursor: n-resize; }
+    .resize-handle.s { bottom: -7px; left: 50%; transform: translateX(-50%); cursor: s-resize; }
+    .resize-handle.w { left: -7px; top: 50%; transform: translateY(-50%); cursor: w-resize; }
+    .resize-handle.e { right: -7px; top: 50%; transform: translateY(-50%); cursor: e-resize; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="phase-header">
+    <h1>Select Face: {{ person.name if person else 'Unknown' }}</h1>
+    <p>{{ photo.file_name }} ({{ photo.folder_name }})</p>
+    <a href="{{ url_for('phase1.browse') }}" class="btn btn-secondary">Back to Browse</a>
+</div>
+
+<div class="collect-layout">
+    <div class="photo-section">
+        <div class="photo-container" id="photoContainer">
+            <img id="mainPhoto" src="/api/photos/{{ photo.id }}/image" alt="{{ photo.file_name }}">
+        </div>
+
+        <div class="photo-actions">
+            <button onclick="resetBbox()" class="btn btn-secondary">Reset Box</button>
+            <button onclick="submitFace()" class="btn btn-primary" id="submitBtn" disabled>
+                Add as Example for {{ person.name if person else 'Unknown' }}
+            </button>
+        </div>
+    </div>
+
+    <div class="sidebar">
+        <div class="card">
+            <h3>Instructions</h3>
+            <ol>
+                <li><strong>Click and drag</strong> on the photo to draw a box around the face</li>
+                <li><strong>Drag the box</strong> to move it</li>
+                <li><strong>Drag the corners/edges</strong> to resize</li>
+                <li>Click <strong>"Add as Example"</strong> when done</li>
+            </ol>
+        </div>
+
+        <div class="card" id="bboxInfo" style="display: none;">
+            <h3>Bounding Box</h3>
+            <p>Position: <span id="bboxPos">-</span></p>
+            <p>Size: <span id="bboxSize">-</span></p>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const photoId = {{ photo.id }};
+    const personId = {{ person.id if person else 'null' }};
+
+    const container = document.getElementById('photoContainer');
+    const img = document.getElementById('mainPhoto');
+    let bbox = null;
+    let imageScale = 1;
+    let isDrawing = false;
+    let isDragging = false;
+    let isResizing = false;
+    let startX, startY;
+    let dragOffsetX, dragOffsetY;
+    let resizeHandle = null;
+    let startRect = null;
+
+    img.onload = function() {
+        imageScale = img.naturalWidth / img.clientWidth;
+    };
+
+    // Create bounding box element
+    function createBbox(x, y, width, height) {
+        if (bbox) bbox.remove();
+
+        bbox = document.createElement('div');
+        bbox.className = 'bbox';
+        bbox.style.left = x + 'px';
+        bbox.style.top = y + 'px';
+        bbox.style.width = width + 'px';
+        bbox.style.height = height + 'px';
+
+        // Add resize handles
+        ['nw', 'n', 'ne', 'w', 'e', 'sw', 's', 'se'].forEach(pos => {
+            const handle = document.createElement('div');
+            handle.className = `resize-handle ${pos}`;
+            handle.dataset.handle = pos;
+            bbox.appendChild(handle);
+        });
+
+        container.appendChild(bbox);
+        setupBboxEvents();
+        updateBboxInfo();
+        document.getElementById('submitBtn').disabled = false;
+        document.getElementById('bboxInfo').style.display = 'block';
+    }
+
+    function setupBboxEvents() {
+        // Drag to move
+        bbox.addEventListener('mousedown', (e) => {
+            if (e.target.classList.contains('resize-handle')) return;
+            isDragging = true;
+            dragOffsetX = e.clientX - bbox.offsetLeft;
+            dragOffsetY = e.clientY - bbox.offsetTop;
+            e.preventDefault();
+        });
+
+        // Resize handles
+        bbox.querySelectorAll('.resize-handle').forEach(handle => {
+            handle.addEventListener('mousedown', (e) => {
+                isResizing = true;
+                resizeHandle = e.target.dataset.handle;
+                startX = e.clientX;
+                startY = e.clientY;
+                startRect = {
+                    left: bbox.offsetLeft,
+                    top: bbox.offsetTop,
+                    width: bbox.offsetWidth,
+                    height: bbox.offsetHeight
+                };
+                e.preventDefault();
+                e.stopPropagation();
+            });
+        });
+    }
+
+    // Mouse events on container for drawing
+    container.addEventListener('mousedown', (e) => {
+        if (e.target === img) {
+            const rect = container.getBoundingClientRect();
+            startX = e.clientX - rect.left;
+            startY = e.clientY - rect.top;
+            isDrawing = true;
+        }
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        const rect = container.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        if (isDrawing) {
+            const width = Math.abs(mouseX - startX);
+            const height = Math.abs(mouseY - startY);
+            const left = Math.min(mouseX, startX);
+            const top = Math.min(mouseY, startY);
+
+            if (width > 10 && height > 10) {
+                createBbox(left, top, width, height);
+            }
+        } else if (isDragging && bbox) {
+            let newLeft = e.clientX - dragOffsetX;
+            let newTop = e.clientY - dragOffsetY;
+
+            // Constrain to image bounds
+            newLeft = Math.max(0, Math.min(newLeft, img.clientWidth - bbox.offsetWidth));
+            newTop = Math.max(0, Math.min(newTop, img.clientHeight - bbox.offsetHeight));
+
+            bbox.style.left = newLeft + 'px';
+            bbox.style.top = newTop + 'px';
+            updateBboxInfo();
+        } else if (isResizing && bbox) {
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+
+            let newLeft = startRect.left;
+            let newTop = startRect.top;
+            let newWidth = startRect.width;
+            let newHeight = startRect.height;
+
+            if (resizeHandle.includes('e')) newWidth = Math.max(30, startRect.width + dx);
+            if (resizeHandle.includes('w')) {
+                newWidth = Math.max(30, startRect.width - dx);
+                if (newWidth > 30) newLeft = startRect.left + dx;
+            }
+            if (resizeHandle.includes('s')) newHeight = Math.max(30, startRect.height + dy);
+            if (resizeHandle.includes('n')) {
+                newHeight = Math.max(30, startRect.height - dy);
+                if (newHeight > 30) newTop = startRect.top + dy;
+            }
+
+            // Constrain to image bounds
+            newLeft = Math.max(0, newLeft);
+            newTop = Math.max(0, newTop);
+            newWidth = Math.min(newWidth, img.clientWidth - newLeft);
+            newHeight = Math.min(newHeight, img.clientHeight - newTop);
+
+            bbox.style.left = newLeft + 'px';
+            bbox.style.top = newTop + 'px';
+            bbox.style.width = newWidth + 'px';
+            bbox.style.height = newHeight + 'px';
+            updateBboxInfo();
+        }
+    });
+
+    document.addEventListener('mouseup', () => {
+        isDrawing = false;
+        isDragging = false;
+        isResizing = false;
+        resizeHandle = null;
+    });
+
+    function updateBboxInfo() {
+        if (!bbox) return;
+        document.getElementById('bboxPos').textContent =
+            `(${Math.round(bbox.offsetLeft * imageScale)}, ${Math.round(bbox.offsetTop * imageScale)})`;
+        document.getElementById('bboxSize').textContent =
+            `${Math.round(bbox.offsetWidth * imageScale)} x ${Math.round(bbox.offsetHeight * imageScale)}`;
+    }
+
+    function resetBbox() {
+        if (bbox) {
+            bbox.remove();
+            bbox = null;
+        }
+        document.getElementById('submitBtn').disabled = true;
+        document.getElementById('bboxInfo').style.display = 'none';
+    }
+
+    async function submitFace() {
+        if (!bbox || !personId) return;
+
+        // Get bbox coordinates in image scale
+        const bboxData = {
+            top: Math.round(bbox.offsetTop * imageScale),
+            left: Math.round(bbox.offsetLeft * imageScale),
+            bottom: Math.round((bbox.offsetTop + bbox.offsetHeight) * imageScale),
+            right: Math.round((bbox.offsetLeft + bbox.offsetWidth) * imageScale)
+        };
+
+        document.getElementById('submitBtn').disabled = true;
+        document.getElementById('submitBtn').textContent = 'Saving...';
+
+        try {
+            // Create a detected face entry with manual bbox
+            const faceResult = await api.post(`/api/photos/${photoId}/faces/manual`, bboxData);
+
+            if (faceResult.error) {
+                alert('Error creating face: ' + faceResult.error);
+                return;
+            }
+
+            // Add as example
+            const exampleResult = await api.post(`/api/persons/${personId}/examples`, {
+                face_id: faceResult.face.id,
+                is_positive: true
+            });
+
+            if (exampleResult.error) {
+                alert('Error adding example: ' + exampleResult.error);
+                return;
+            }
+
+            alert('Face added as example!');
+            window.location.href = '{{ url_for("phase1.index") }}';
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
+
+        document.getElementById('submitBtn').disabled = false;
+        document.getElementById('submitBtn').textContent = 'Add as Example for {{ person.name }}';
+    }
+</script>
+{% endblock %}

@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block title %}Phase 3: Full Scan - FaceID{% endblock %}
+
+{% block content %}
+<div class="phase-header">
+    <h1>Phase 3: Full Photo Scan</h1>
+    <p>Scan all photos to find {{ person.name if person else 'the target person' }}.</p>
+</div>
+
+{% if not person %}
+<div class="card warning">
+    <p>No person selected. <a href="{{ url_for('phase1.index') }}">Go to Phase 1</a> to set up.</p>
+</div>
+{% elif not classifier %}
+<div class="card warning">
+    <p>No classifier trained. <a href="{{ url_for('phase2.index') }}">Go to Phase 2</a> to train first.</p>
+</div>
+{% else %}
+
+<!-- Scan Control -->
+<div class="card">
+    <h2>Scan Settings</h2>
+
+    <div class="form-group">
+        <label>Select folders to scan:</label>
+        <div class="folder-checkboxes">
+            <label class="checkbox-label">
+                <input type="checkbox" id="allFolders" checked onchange="toggleAllFolders()">
+                All folders
+            </label>
+            {% for folder in folders %}
+            <label class="checkbox-label folder-checkbox">
+                <input type="checkbox" class="folder-cb" value="{{ folder.name }}" checked>
+                {{ folder.name }} ({{ folder.count }})
+            </label>
+            {% endfor %}
+        </div>
+    </div>
+
+    <button onclick="startScan()" class="btn btn-primary btn-large" id="scanBtn">
+        Start Scan
+    </button>
+
+    <div id="scanProgress" class="scan-progress" style="display: none;">
+        <div class="progress-container">
+            <div class="progress-bar" id="scanProgressBar"></div>
+        </div>
+        <p id="scanProgressText">Scanning...</p>
+    </div>
+</div>
+
+<!-- Results Summary -->
+<div class="card" id="resultsSummary" style="display: none;">
+    <h2>Scan Results</h2>
+
+    <div class="stats-row">
+        <div class="stat-card">
+            <div class="stat-value" id="totalPhotos">0</div>
+            <div class="stat-label">Photos Scanned</div>
+        </div>
+        <div class="stat-card highlight">
+            <div class="stat-value" id="matchedPhotos">0</div>
+            <div class="stat-label">Photos with {{ person.name }}</div>
+        </div>
+    </div>
+
+    <a href="{{ url_for('phase3.gallery') }}" class="btn btn-primary btn-large">
+        View Results Gallery
+    </a>
+</div>
+
+{% if scan_results_count > 0 %}
+<div class="card">
+    <h2>Previous Scan</h2>
+    <p>{{ scan_results_count }} results from previous scan.</p>
+    <a href="{{ url_for('phase3.gallery') }}" class="btn btn-secondary">View Gallery</a>
+</div>
+{% endif %}
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const personId = {{ person.id if person else 'null' }};
+    const classifierId = {{ classifier.id if classifier else 'null' }};
+
+    function toggleAllFolders() {
+        const allChecked = document.getElementById('allFolders').checked;
+        document.querySelectorAll('.folder-cb').forEach(cb => {
+            cb.checked = allChecked;
+        });
+    }
+
+    async function startScan() {
+        const btn = document.getElementById('scanBtn');
+        const progress = document.getElementById('scanProgress');
+        const summary = document.getElementById('resultsSummary');
+
+        btn.disabled = true;
+        btn.textContent = 'Scanning...';
+        progress.style.display = 'block';
+        summary.style.display = 'none';
+
+        // Get selected folders
+        const allFolders = document.getElementById('allFolders').checked;
+        let folder = null;
+        if (!allFolders) {
+            const selected = Array.from(document.querySelectorAll('.folder-cb:checked')).map(cb => cb.value);
+            if (selected.length === 1) {
+                folder = selected[0];
+            }
+        }
+
+        try {
+            const result = await api.post('/api/scan', {
+                classifier_id: classifierId,
+                folder: folder
+            });
+
+            document.getElementById('totalPhotos').textContent = result.total_photos;
+            document.getElementById('matchedPhotos').textContent = result.photos_with_matches;
+            document.getElementById('scanProgressBar').style.width = '100%';
+            document.getElementById('scanProgressText').textContent = 'Scan complete!';
+
+            summary.style.display = 'block';
+        } catch (err) {
+            alert('Scan error: ' + err.message);
+        }
+
+        btn.disabled = false;
+        btn.textContent = 'Start Scan';
+    }
+</script>
+{% endblock %}

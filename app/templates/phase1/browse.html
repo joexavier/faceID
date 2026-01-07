@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}Browse Photos - FaceID{% endblock %}
+
+{% block content %}
+<div class="phase-header">
+    <h1>Browse Photos</h1>
+    <p>Select a photo to mark faces. Looking for: <strong>{{ person.name if person else 'No person selected' }}</strong></p>
+    <a href="{{ url_for('phase1.index') }}" class="btn btn-secondary">Back to Dashboard</a>
+</div>
+
+<!-- Folder Tabs -->
+<div class="folder-tabs">
+    <button class="folder-tab active" data-folder="">All ({{ folders|sum(attribute='count') }})</button>
+    {% for folder in folders %}
+    <button class="folder-tab" data-folder="{{ folder.name }}">{{ folder.name }} ({{ folder.count }})</button>
+    {% endfor %}
+</div>
+
+<!-- Photo Grid -->
+<div id="photoGrid" class="photo-grid">
+    <p class="loading">Loading photos...</p>
+</div>
+
+<!-- Pagination -->
+<div id="pagination" class="pagination"></div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let currentFolder = '';
+    let currentPage = 1;
+
+    // Folder tab switching
+    document.querySelectorAll('.folder-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.folder-tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            currentFolder = tab.dataset.folder;
+            currentPage = 1;
+            loadPhotos();
+        });
+    });
+
+    async function loadPhotos() {
+        const grid = document.getElementById('photoGrid');
+        grid.innerHTML = '<p class="loading">Loading photos...</p>';
+
+        let url = `/api/photos?page=${currentPage}&per_page=30`;
+        if (currentFolder) {
+            url += `&folder=${encodeURIComponent(currentFolder)}`;
+        }
+
+        const data = await api.get(url);
+
+        if (data.photos.length === 0) {
+            grid.innerHTML = '<p class="empty-message">No photos found</p>';
+            return;
+        }
+
+        grid.innerHTML = data.photos.map(photo => `
+            <div class="photo-card" onclick="selectPhoto(${photo.id})">
+                <img src="/api/photos/${photo.id}/thumbnail?size=200" alt="${photo.file_name}">
+                <div class="photo-info">
+                    <span class="face-count">${photo.face_count > 0 ? photo.face_count + ' faces' : 'Not scanned'}</span>
+                </div>
+            </div>
+        `).join('');
+
+        // Pagination
+        const pagination = document.getElementById('pagination');
+        if (data.pages > 1) {
+            let html = '';
+            for (let i = 1; i <= data.pages; i++) {
+                html += `<button class="page-btn ${i === currentPage ? 'active' : ''}" onclick="goToPage(${i})">${i}</button>`;
+            }
+            pagination.innerHTML = html;
+        } else {
+            pagination.innerHTML = '';
+        }
+    }
+
+    function selectPhoto(photoId) {
+        window.location.href = `/phase1/photo/${photoId}`;
+    }
+
+    function goToPage(page) {
+        currentPage = page;
+        loadPhotos();
+    }
+
+    // Initial load
+    loadPhotos();
+</script>
+{% endblock %}

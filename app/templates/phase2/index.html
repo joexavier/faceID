@@ -1,0 +1,406 @@
+{% extends "base.html" %}
+
+{% block title %}Phase 2: Train & Evaluate - FaceID{% endblock %}
+
+{% block head %}
+<style>
+    .photo-grid-select {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: 1rem;
+    }
+    .photo-select-card {
+        position: relative;
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        background: white;
+    }
+    .photo-select-card img {
+        width: 100%;
+        aspect-ratio: 1;
+        object-fit: cover;
+        display: block;
+    }
+    .photo-select-card .select-btn {
+        position: absolute;
+        bottom: 8px;
+        right: 8px;
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        border: 3px solid white;
+        background: rgba(0,0,0,0.5);
+        color: white;
+        font-size: 1.2rem;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s;
+    }
+    .photo-select-card .select-btn:hover {
+        background: #4a90d9;
+        transform: scale(1.1);
+    }
+    .photo-select-card.selected {
+        outline: 4px solid #28a745;
+    }
+    .photo-select-card.selected .select-btn {
+        background: #28a745;
+    }
+    .photo-select-card .folder-label {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        background: rgba(0,0,0,0.6);
+        color: white;
+        padding: 4px 8px;
+        font-size: 0.7rem;
+    }
+    .done-button-container {
+        position: sticky;
+        bottom: 20px;
+        display: flex;
+        justify-content: center;
+        padding: 20px;
+        z-index: 100;
+    }
+    .done-button {
+        padding: 1rem 3rem;
+        font-size: 1.3rem;
+        background: #28a745;
+        color: white;
+        border: none;
+        border-radius: 50px;
+        cursor: pointer;
+        box-shadow: 0 4px 15px rgba(40, 167, 69, 0.4);
+        transition: all 0.2s;
+    }
+    .done-button:hover {
+        transform: scale(1.05);
+        box-shadow: 0 6px 20px rgba(40, 167, 69, 0.5);
+    }
+    .done-button:disabled {
+        background: #ccc;
+        box-shadow: none;
+        cursor: not-allowed;
+    }
+    .selection-count {
+        background: #4a90d9;
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-weight: bold;
+        display: inline-block;
+        margin-bottom: 1rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="phase-header">
+    <h1>Phase 2: Train & Evaluate</h1>
+    <p>Select test photos containing <strong>{{ person.name if person else 'the target person' }}</strong>, then train the classifier.</p>
+</div>
+
+{% if not person %}
+<div class="card warning">
+    <p>No person selected. <a href="{{ url_for('phase1.index') }}">Go to Phase 1</a> to set up.</p>
+</div>
+{% else %}
+
+<!-- Status Overview -->
+<div class="stats-row">
+    <div class="stat-card">
+        <div class="stat-value">{{ training_count }}</div>
+        <div class="stat-label">Training Examples</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" id="testCountStat">{{ test_count }}</div>
+        <div class="stat-label">Test Photos Selected</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ (classifier.test_accuracy * 100)|round(1) if classifier and classifier.test_accuracy else '--' }}%</div>
+        <div class="stat-label">Accuracy</div>
+    </div>
+</div>
+
+<!-- Test Set Selection -->
+<div class="card" id="selectionCard">
+    <h2>Step 1: Select Test Photos</h2>
+    <p>Click the <strong>+</strong> button on photos that contain <strong>{{ person.name }}</strong>. Select around 20 photos.</p>
+
+    <div class="selection-count">
+        <span id="selectedCount">0</span> photos selected
+    </div>
+
+    <!-- Folder Tabs -->
+    <div class="folder-tabs" id="folderTabs">
+        <button class="folder-tab active" data-folder="">All Photos</button>
+    </div>
+
+    <!-- Photo Grid -->
+    <div id="testPhotoGrid" class="photo-grid-select">
+        <p class="loading">Loading photos...</p>
+    </div>
+
+    <!-- Done Button -->
+    <div class="done-button-container">
+        <button onclick="finishSelection()" class="done-button" id="doneBtn" disabled>
+            I'm Done - Train Classifier
+        </button>
+    </div>
+</div>
+
+<!-- Training Results (shown after training) -->
+<div class="card" id="resultsCard" style="display: none;">
+    <h2>Step 2: Training Results</h2>
+
+    <div class="metrics-grid" id="metricsGrid">
+        <!-- Filled by JS -->
+    </div>
+
+    <div class="threshold-control">
+        <label>Decision Threshold: <span id="thresholdValue">0.5</span></label>
+        <input type="range" id="thresholdSlider" min="0" max="1" step="0.05" value="0.5" onchange="updateThreshold()">
+    </div>
+
+    <a href="{{ url_for('phase3.index') }}" class="btn btn-success btn-large">
+        Proceed to Phase 3: Full Scan
+    </a>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const personId = {{ person.id if person else 'null' }};
+    let selectedPhotos = new Set();
+    let allPhotos = [];
+    let classifierId = {{ classifier.id if classifier else 'null' }};
+
+    async function loadFolders() {
+        const folders = await api.get('/api/folders');
+        const tabs = document.getElementById('folderTabs');
+
+        folders.forEach(folder => {
+            const btn = document.createElement('button');
+            btn.className = 'folder-tab';
+            btn.dataset.folder = folder.name;
+            btn.textContent = `${folder.name} (${folder.count})`;
+            btn.onclick = () => filterByFolder(folder.name);
+            tabs.appendChild(btn);
+        });
+    }
+
+    async function loadAllPhotos() {
+        const grid = document.getElementById('testPhotoGrid');
+        grid.innerHTML = '<p class="loading">Loading photos...</p>';
+
+        // Load all photos
+        const data = await api.get('/api/photos?per_page=500');
+        allPhotos = data.photos;
+
+        renderPhotos(allPhotos);
+    }
+
+    function renderPhotos(photos) {
+        const grid = document.getElementById('testPhotoGrid');
+
+        if (photos.length === 0) {
+            grid.innerHTML = '<p class="empty-message">No photos found</p>';
+            return;
+        }
+
+        grid.innerHTML = photos.map(photo => `
+            <div class="photo-select-card ${selectedPhotos.has(photo.id) ? 'selected' : ''}"
+                 data-photo-id="${photo.id}">
+                <div class="folder-label">${photo.folder_name}</div>
+                <img src="/api/photos/${photo.id}/thumbnail?size=200" alt="${photo.file_name}">
+                <button class="select-btn" onclick="togglePhoto(${photo.id}, event)">
+                    ${selectedPhotos.has(photo.id) ? '✓' : '+'}
+                </button>
+            </div>
+        `).join('');
+    }
+
+    function filterByFolder(folder) {
+        // Update active tab
+        document.querySelectorAll('.folder-tab').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.folder === folder);
+        });
+
+        // Filter photos
+        const filtered = folder ?
+            allPhotos.filter(p => p.folder_name === folder) :
+            allPhotos;
+
+        renderPhotos(filtered);
+    }
+
+    async function togglePhoto(photoId, event) {
+        event.stopPropagation();
+
+        const card = document.querySelector(`[data-photo-id="${photoId}"]`);
+        const btn = card.querySelector('.select-btn');
+
+        if (selectedPhotos.has(photoId)) {
+            selectedPhotos.delete(photoId);
+            card.classList.remove('selected');
+            btn.textContent = '+';
+        } else {
+            selectedPhotos.add(photoId);
+            card.classList.add('selected');
+            btn.textContent = '✓';
+        }
+
+        updateSelectionCount();
+    }
+
+    function updateSelectionCount() {
+        const count = selectedPhotos.size;
+        document.getElementById('selectedCount').textContent = count;
+        document.getElementById('testCountStat').textContent = count;
+        document.getElementById('doneBtn').disabled = count < 3;
+    }
+
+    async function finishSelection() {
+        if (selectedPhotos.size < 3) {
+            alert('Please select at least 3 test photos');
+            return;
+        }
+
+        const btn = document.getElementById('doneBtn');
+        btn.disabled = true;
+        btn.textContent = 'Processing photos...';
+
+        try {
+            // For each selected photo, detect face and add as test example
+            let processed = 0;
+            for (const photoId of selectedPhotos) {
+                // Create manual face for the whole image center area as approximation
+                // Or we can use auto-detection here
+                const photoData = await api.get(`/api/photos/${photoId}`);
+
+                // Check if photo already has faces detected
+                let faces = photoData.faces || [];
+                if (faces.length === 0) {
+                    // Detect faces
+                    const detectResult = await api.post(`/api/photos/${photoId}/detect`);
+                    faces = detectResult.faces || [];
+                }
+
+                // Add first face as positive test example (assuming target person is in photo)
+                if (faces.length > 0) {
+                    await api.post(`/api/persons/${personId}/examples`, {
+                        face_id: faces[0].id,
+                        is_test_set: true,
+                        is_positive: true
+                    });
+                }
+
+                processed++;
+                btn.textContent = `Processing... ${processed}/${selectedPhotos.size}`;
+            }
+
+            btn.textContent = 'Training classifier...';
+
+            // Train the classifier
+            const trainResult = await api.post(`/api/persons/${personId}/train`, {
+                algorithm: 'svm'
+            });
+
+            if (trainResult.error) {
+                // Try centroid if SVM fails (not enough negatives)
+                const trainResult2 = await api.post(`/api/persons/${personId}/train`, {
+                    algorithm: 'centroid'
+                });
+                if (trainResult2.error) {
+                    alert('Training error: ' + trainResult2.error);
+                    btn.textContent = "I'm Done - Train Classifier";
+                    btn.disabled = false;
+                    return;
+                }
+                classifierId = trainResult2.id;
+            } else {
+                classifierId = trainResult.id;
+            }
+
+            // Evaluate
+            const evalResult = await api.post(`/api/classifiers/${classifierId}/evaluate`);
+
+            // Show results
+            showResults(evalResult);
+
+        } catch (err) {
+            alert('Error: ' + err.message);
+            btn.textContent = "I'm Done - Train Classifier";
+            btn.disabled = false;
+        }
+    }
+
+    function showResults(metrics) {
+        document.getElementById('selectionCard').style.display = 'none';
+        document.getElementById('resultsCard').style.display = 'block';
+
+        document.getElementById('metricsGrid').innerHTML = `
+            <div class="metric">
+                <span class="metric-value big">${(metrics.accuracy * 100).toFixed(1)}%</span>
+                <span class="metric-label">Accuracy</span>
+            </div>
+            <div class="metric">
+                <span class="metric-value big">${(metrics.precision * 100).toFixed(1)}%</span>
+                <span class="metric-label">Precision</span>
+            </div>
+            <div class="metric">
+                <span class="metric-value big">${(metrics.recall * 100).toFixed(1)}%</span>
+                <span class="metric-label">Recall</span>
+            </div>
+            <div class="metric">
+                <span class="metric-value big">${(metrics.f1 * 100).toFixed(1)}%</span>
+                <span class="metric-label">F1 Score</span>
+            </div>
+        `;
+    }
+
+    async function updateThreshold() {
+        if (!classifierId) return;
+        const value = parseFloat(document.getElementById('thresholdSlider').value);
+        document.getElementById('thresholdValue').textContent = value.toFixed(2);
+        await api.put(`/api/classifiers/${classifierId}/threshold`, {threshold: value});
+    }
+
+    // Check if already trained
+    {% if classifier %}
+    document.getElementById('selectionCard').style.display = 'none';
+    document.getElementById('resultsCard').style.display = 'block';
+    document.getElementById('metricsGrid').innerHTML = `
+        <div class="metric">
+            <span class="metric-value big">{{ (classifier.test_accuracy * 100)|round(1) if classifier.test_accuracy else '--' }}%</span>
+            <span class="metric-label">Accuracy</span>
+        </div>
+        <div class="metric">
+            <span class="metric-value big">{{ (classifier.test_precision * 100)|round(1) if classifier.test_precision else '--' }}%</span>
+            <span class="metric-label">Precision</span>
+        </div>
+        <div class="metric">
+            <span class="metric-value big">{{ (classifier.test_recall * 100)|round(1) if classifier.test_recall else '--' }}%</span>
+            <span class="metric-label">Recall</span>
+        </div>
+        <div class="metric">
+            <span class="metric-value big">{{ (classifier.test_f1 * 100)|round(1) if classifier.test_f1 else '--' }}%</span>
+            <span class="metric-label">F1 Score</span>
+        </div>
+    `;
+    document.getElementById('thresholdSlider').value = {{ classifier.optimal_threshold }};
+    document.getElementById('thresholdValue').textContent = '{{ classifier.optimal_threshold }}';
+    {% else %}
+    // Initialize
+    loadFolders();
+    loadAllPhotos();
+    {% endif %}
+</script>
+{% endblock %}

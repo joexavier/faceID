@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+
+{% block title %}Phase 1: Collect Examples - FaceID{% endblock %}
+
+{% block content %}
+<div class="phase-header">
+    <h1>Phase 1: Collect Face Examples</h1>
+    <p>Select photos containing the target person and mark their face.</p>
+</div>
+
+<!-- Person Selection -->
+<div class="card">
+    <h2>Target Person</h2>
+    {% if person %}
+        <div class="person-info">
+            <span class="person-name">{{ person.name }}</span>
+            <button onclick="changePerson()" class="btn btn-secondary">Change</button>
+        </div>
+    {% else %}
+        <div class="person-setup">
+            <input type="text" id="personName" placeholder="Enter person's name" class="input">
+            <button onclick="createPerson()" class="btn btn-primary">Create</button>
+        </div>
+    {% endif %}
+</div>
+
+<!-- Progress -->
+<div class="card">
+    <h2>Collection Progress</h2>
+    <div id="diversityStats">
+        <div class="progress-container">
+            <div class="progress-bar" style="width: 0%"></div>
+        </div>
+        <p class="progress-text">{{ example_count }} / 10 examples collected</p>
+        <div id="recommendations"></div>
+    </div>
+    {% if person %}
+        <a href="{{ url_for('phase1.browse') }}" class="btn btn-primary">Browse Photos</a>
+    {% endif %}
+</div>
+
+<!-- Collected Examples -->
+<div class="card">
+    <h2>Collected Examples</h2>
+    <div id="collectedExamples" class="face-grid">
+        <p class="empty-message">No examples collected yet</p>
+    </div>
+</div>
+
+{% if person and example_count >= 5 %}
+<div class="card">
+    <a href="{{ url_for('phase2.index') }}" class="btn btn-success btn-large">
+        Proceed to Phase 2: Training
+    </a>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const personId = {{ person.id if person else 'null' }};
+
+    async function createPerson() {
+        const name = document.getElementById('personName').value.trim();
+        if (!name) {
+            alert('Please enter a name');
+            return;
+        }
+        await api.post('/api/persons', {name});
+        location.reload();
+    }
+
+    function changePerson() {
+        if (confirm('Create a new person? This will start fresh.')) {
+            document.querySelector('.person-info').innerHTML = `
+                <input type="text" id="personName" placeholder="Enter person's name" class="input">
+                <button onclick="createPerson()" class="btn btn-primary">Create</button>
+            `;
+        }
+    }
+
+    async function loadDiversity() {
+        if (!personId) return;
+
+        const data = await api.get(`/api/persons/${personId}/diversity`);
+
+        // Update progress bar
+        const percentage = data.progress?.percentage || 0;
+        document.querySelector('.progress-bar').style.width = percentage + '%';
+        document.querySelector('.progress-text').textContent =
+            `${data.count} / ${data.progress?.optimal || 10} examples collected (${data.quality_score?.toFixed(0) || 0}% quality)`;
+
+        // Show recommendations
+        const recsHtml = data.recommendations?.map(r => `<p class="recommendation">${r}</p>`).join('') || '';
+        document.getElementById('recommendations').innerHTML = recsHtml;
+
+        // Update ready status
+        if (data.ready_for_training) {
+            document.querySelector('.progress-bar').classList.add('ready');
+        }
+    }
+
+    async function loadExamples() {
+        if (!personId) return;
+
+        const examples = await api.get(`/api/persons/${personId}/examples`);
+
+        const container = document.getElementById('collectedExamples');
+        if (examples.length === 0) {
+            container.innerHTML = '<p class="empty-message">No examples collected yet</p>';
+            return;
+        }
+
+        container.innerHTML = examples.map(ex => `
+            <div class="face-card">
+                <img src="/api/faces/${ex.detected_face_id}/thumbnail" alt="Face">
+                <button onclick="removeExample(${ex.id})" class="remove-btn">&times;</button>
+            </div>
+        `).join('');
+    }
+
+    async function removeExample(exampleId) {
+        if (!confirm('Remove this example?')) return;
+        await api.delete(`/api/persons/${personId}/examples/${exampleId}`);
+        loadExamples();
+        loadDiversity();
+    }
+
+    // Initialize
+    loadDiversity();
+    loadExamples();
+</script>
+{% endblock %}

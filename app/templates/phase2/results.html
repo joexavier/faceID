@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}Training Results - FaceID{% endblock %}
+
+{% block content %}
+<div class="phase-header">
+    <h1>Training Results</h1>
+    <a href="{{ url_for('phase2.index') }}" class="btn btn-secondary">Back to Phase 2</a>
+</div>
+
+{% if classifier %}
+<div class="card">
+    <h2>Classifier Details</h2>
+    <div class="metrics-grid">
+        <div class="metric">
+            <span class="metric-label">Algorithm</span>
+            <span class="metric-value">{{ classifier.algorithm|upper }}</span>
+        </div>
+        <div class="metric">
+            <span class="metric-label">Training Examples</span>
+            <span class="metric-value">{{ classifier.num_training_examples }}</span>
+        </div>
+        <div class="metric">
+            <span class="metric-label">Negative Examples</span>
+            <span class="metric-value">{{ classifier.num_negative_examples or 0 }}</span>
+        </div>
+        <div class="metric">
+            <span class="metric-label">Threshold</span>
+            <span class="metric-value">{{ classifier.optimal_threshold|round(2) }}</span>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Performance Metrics</h2>
+    <div class="metrics-grid large">
+        <div class="metric">
+            <span class="metric-value big">{{ (classifier.test_accuracy * 100)|round(1) if classifier.test_accuracy else '--' }}%</span>
+            <span class="metric-label">Accuracy</span>
+        </div>
+        <div class="metric">
+            <span class="metric-value big">{{ (classifier.test_precision * 100)|round(1) if classifier.test_precision else '--' }}%</span>
+            <span class="metric-label">Precision</span>
+        </div>
+        <div class="metric">
+            <span class="metric-value big">{{ (classifier.test_recall * 100)|round(1) if classifier.test_recall else '--' }}%</span>
+            <span class="metric-label">Recall</span>
+        </div>
+        <div class="metric">
+            <span class="metric-value big">{{ (classifier.test_f1 * 100)|round(1) if classifier.test_f1 else '--' }}%</span>
+            <span class="metric-label">F1 Score</span>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="card warning">
+    <p>No classifier trained yet. <a href="{{ url_for('phase2.index') }}">Train a classifier</a> first.</p>
+</div>
+{% endif %}
+{% endblock %}

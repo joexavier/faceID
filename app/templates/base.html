@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}FaceID{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <a href="/">FaceID</a>
+        </div>
+        <div class="nav-links">
+            <a href="{{ url_for('phase1.index') }}" class="{% if request.path.startswith('/phase1') %}active{% endif %}">
+                Phase 1: Collect
+            </a>
+            <a href="{{ url_for('phase2.index') }}" class="{% if request.path.startswith('/phase2') %}active{% endif %}">
+                Phase 2: Train
+            </a>
+            <a href="{{ url_for('phase3.index') }}" class="{% if request.path.startswith('/phase3') %}active{% endif %}">
+                Phase 3: Scan
+            </a>
+        </div>
+        <div class="nav-person">
+            {% if person %}
+                <span class="person-badge">{{ person.name }}</span>
+            {% else %}
+                <span class="person-badge empty">No person selected</span>
+            {% endif %}
+        </div>
+    </nav>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <script>
+        // Global API helper
+        const api = {
+            async get(url) {
+                const response = await fetch(url);
+                return response.json();
+            },
+            async post(url, data = {}) {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                });
+                return response.json();
+            },
+            async put(url, data = {}) {
+                const response = await fetch(url, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                });
+                return response.json();
+            },
+            async delete(url) {
+                const response = await fetch(url, {method: 'DELETE'});
+                return response.json();
+            }
+        };
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

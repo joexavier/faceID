@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+
+{% block title %}Results Gallery - FaceID{% endblock %}
+
+{% block head %}
+<style>
+    .gallery-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+        gap: 1rem;
+    }
+    .gallery-item {
+        position: relative;
+        background: white;
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .gallery-item img {
+        width: 100%;
+        aspect-ratio: 1;
+        object-fit: cover;
+        display: block;
+    }
+    .gallery-item.has-match {
+        outline: 5px solid #28a745;
+        outline-offset: -5px;
+    }
+    .gallery-item.has-match::before {
+        content: "{{ person.name if person else 'Match' }}";
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        background: #28a745;
+        color: white;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.85rem;
+        font-weight: bold;
+        z-index: 10;
+    }
+    .gallery-item .photo-label {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: rgba(0,0,0,0.6);
+        color: white;
+        padding: 8px;
+        font-size: 0.75rem;
+    }
+    .gallery-item .confidence {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background: rgba(0,0,0,0.7);
+        color: white;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+    }
+    .folder-section {
+        margin-bottom: 2rem;
+    }
+    .folder-section h2 {
+        margin-bottom: 1rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid #dee2e6;
+    }
+    .folder-section h2 .match-count {
+        font-size: 1rem;
+        color: #28a745;
+        font-weight: normal;
+    }
+    .summary-bar {
+        background: white;
+        padding: 1rem 1.5rem;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        margin-bottom: 1.5rem;
+        display: flex;
+        gap: 2rem;
+        align-items: center;
+    }
+    .summary-stat {
+        text-align: center;
+    }
+    .summary-stat .value {
+        font-size: 1.5rem;
+        font-weight: bold;
+        color: #28a745;
+    }
+    .summary-stat .label {
+        font-size: 0.85rem;
+        color: #6c757d;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="phase-header">
+    <h1>Results Gallery</h1>
+    <p>Photos containing <strong>{{ person.name if person else 'the target person' }}</strong> are highlighted in green</p>
+    <a href="{{ url_for('phase3.index') }}" class="btn btn-secondary">Back to Scan</a>
+</div>
+
+{% if not classifier %}
+<div class="card warning">
+    <p>No scan results. <a href="{{ url_for('phase3.index') }}">Run a scan</a> first.</p>
+</div>
+{% else %}
+
+<!-- Summary -->
+<div class="summary-bar">
+    <div class="summary-stat">
+        <div class="value" id="totalPhotos">-</div>
+        <div class="label">Total Photos</div>
+    </div>
+    <div class="summary-stat">
+        <div class="value" id="matchedPhotos">-</div>
+        <div class="label">With {{ person.name }}</div>
+    </div>
+    <div class="summary-stat">
+        <div class="value" id="matchPercent">-</div>
+        <div class="label">Match Rate</div>
+    </div>
+</div>
+
+<!-- Gallery by folder -->
+<div id="galleryContainer">
+    <p class="loading">Loading results...</p>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const classifierId = {{ classifier.id if classifier else 'null' }};
+    const personName = "{{ person.name if person else 'Target' }}";
+
+    async function loadResults() {
+        if (!classifierId) return;
+
+        const container = document.getElementById('galleryContainer');
+        container.innerHTML = '<p class="loading">Loading results...</p>';
+
+        // Get scan results
+        const data = await api.get(`/api/scan/results?classifier_id=${classifierId}`);
+
+        // Update summary
+        document.getElementById('totalPhotos').textContent = data.total;
+        document.getElementById('matchedPhotos').textContent = data.with_matches;
+        const percent = data.total > 0 ? Math.round(data.with_matches / data.total * 100) : 0;
+        document.getElementById('matchPercent').textContent = percent + '%';
+
+        // Get all photos to show everything (including non-scanned)
+        const allPhotosData = await api.get('/api/photos?per_page=500');
+        const allPhotos = allPhotosData.photos;
+
+        // Create a map of photo_id -> match info
+        const matchMap = {};
+        data.results.forEach(r => {
+            if (r.match_count > 0) {
+                matchMap[r.photo.id] = {
+                    matches: r.matches,
+                    score: r.matches[0]?.score || 0
+                };
+            }
+        });
+
+        // Group all photos by folder
+        const byFolder = {};
+        allPhotos.forEach(photo => {
+            if (!byFolder[photo.folder_name]) {
+                byFolder[photo.folder_name] = [];
+            }
+            byFolder[photo.folder_name].push({
+                photo: photo,
+                hasMatch: !!matchMap[photo.id],
+                matchInfo: matchMap[photo.id]
+            });
+        });
+
+        // Render by folder
+        let html = '';
+        const folderNames = Object.keys(byFolder).sort();
+
+        for (const folderName of folderNames) {
+            const photos = byFolder[folderName];
+            const matchCount = photos.filter(p => p.hasMatch).length;
+
+            html += `
+                <div class="folder-section">
+                    <h2>${folderName} <span class="match-count">(${matchCount} with ${personName})</span></h2>
+                    <div class="gallery-grid">
+            `;
+
+            // Sort by filename to maintain order
+            photos.sort((a, b) => a.photo.file_name.localeCompare(b.photo.file_name));
+
+            for (const item of photos) {
+                const hasMatch = item.hasMatch;
+                const score = item.matchInfo?.score;
+
+                html += `
+                    <div class="gallery-item ${hasMatch ? 'has-match' : ''}">
+                        <img src="/api/photos/${item.photo.id}/thumbnail?size=300" alt="${item.photo.file_name}">
+                        ${hasMatch && score ? `<div class="confidence">${(score * 100).toFixed(0)}%</div>` : ''}
+                        <div class="photo-label">${item.photo.file_name}</div>
+                    </div>
+                `;
+            }
+
+            html += `
+                    </div>
+                </div>
+            `;
+        }
+
+        container.innerHTML = html || '<p class="empty-message">No photos found</p>';
+    }
+
+    // Initialize
+    loadResults();
+</script>
+{% endblock %}
