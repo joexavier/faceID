@@ -1,12 +1,65 @@
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ExifTags
 import os
 from typing import List, Tuple, Optional
 import urllib.request
 import logging
 
 logger = logging.getLogger('faceID.detection')
+
+
+def load_image_with_exif_rotation(image_path: str) -> Image.Image:
+    """
+    Load an image and apply EXIF orientation rotation.
+
+    This ensures consistent orientation across all processing.
+
+    Args:
+        image_path: Path to image file
+
+    Returns:
+        PIL Image with correct orientation
+    """
+    img = Image.open(image_path)
+
+    try:
+        # Find the orientation tag
+        orientation_key = None
+        for key in ExifTags.TAGS.keys():
+            if ExifTags.TAGS[key] == 'Orientation':
+                orientation_key = key
+                break
+
+        if orientation_key is None:
+            return img
+
+        exif = img._getexif()
+        if exif is None:
+            return img
+
+        orientation = exif.get(orientation_key)
+
+        if orientation == 2:
+            img = img.transpose(Image.FLIP_LEFT_RIGHT)
+        elif orientation == 3:
+            img = img.rotate(180, expand=True)
+        elif orientation == 4:
+            img = img.transpose(Image.FLIP_TOP_BOTTOM)
+        elif orientation == 5:
+            img = img.rotate(-90, expand=True).transpose(Image.FLIP_LEFT_RIGHT)
+        elif orientation == 6:
+            img = img.rotate(-90, expand=True)
+        elif orientation == 7:
+            img = img.rotate(90, expand=True).transpose(Image.FLIP_LEFT_RIGHT)
+        elif orientation == 8:
+            img = img.rotate(90, expand=True)
+
+    except (AttributeError, KeyError, IndexError, TypeError):
+        # No EXIF data or orientation tag
+        pass
+
+    return img
 
 
 class FaceDetectionService:
@@ -51,6 +104,8 @@ class FaceDetectionService:
         """
         Detect faces in an image.
 
+        Automatically handles EXIF orientation for consistent detection.
+
         Args:
             image_path: Path to image file
 
@@ -60,10 +115,15 @@ class FaceDetectionService:
         if not os.path.exists(image_path):
             raise FileNotFoundError(f"Image not found: {image_path}")
 
-        # Read image
-        image = cv2.imread(image_path)
-        if image is None:
-            raise ValueError(f"Could not read image: {image_path}")
+        # Load image with EXIF rotation applied
+        pil_img = load_image_with_exif_rotation(image_path)
+
+        # Convert to RGB if necessary
+        if pil_img.mode != 'RGB':
+            pil_img = pil_img.convert('RGB')
+
+        # Convert PIL to OpenCV format
+        image = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
         (h, w) = image.shape[:2]
 
@@ -100,7 +160,7 @@ class FaceDetectionService:
 
     def get_image_dimensions(self, image_path: str) -> Tuple[int, int]:
         """
-        Get image width and height.
+        Get image width and height after EXIF rotation.
 
         Args:
             image_path: Path to image file
@@ -108,8 +168,8 @@ class FaceDetectionService:
         Returns:
             Tuple of (width, height)
         """
-        with Image.open(image_path) as img:
-            return img.size
+        img = load_image_with_exif_rotation(image_path)
+        return img.size
 
     def create_thumbnail(self, image_path: str, output_path: str, size: Tuple[int, int] = (300, 300)) -> str:
         """
@@ -125,34 +185,18 @@ class FaceDetectionService:
         """
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-        with Image.open(image_path) as img:
-            # Handle EXIF orientation
-            try:
-                from PIL import ExifTags
-                for orientation in ExifTags.TAGS.keys():
-                    if ExifTags.TAGS[orientation] == 'Orientation':
-                        break
-                exif = img._getexif()
-                if exif is not None:
-                    orientation_value = exif.get(orientation)
-                    if orientation_value == 3:
-                        img = img.rotate(180, expand=True)
-                    elif orientation_value == 6:
-                        img = img.rotate(270, expand=True)
-                    elif orientation_value == 8:
-                        img = img.rotate(90, expand=True)
-            except (AttributeError, KeyError, IndexError):
-                pass
+        # Load with EXIF rotation
+        img = load_image_with_exif_rotation(image_path)
 
-            # Convert to RGB if necessary
-            if img.mode in ('RGBA', 'P'):
-                img = img.convert('RGB')
+        # Convert to RGB if necessary
+        if img.mode in ('RGBA', 'P'):
+            img = img.convert('RGB')
 
-            # Create thumbnail maintaining aspect ratio
-            img.thumbnail(size, Image.Resampling.LANCZOS)
+        # Create thumbnail maintaining aspect ratio
+        img.thumbnail(size, Image.Resampling.LANCZOS)
 
-            # Save
-            img.save(output_path, 'JPEG', quality=85)
+        # Save
+        img.save(output_path, 'JPEG', quality=85)
 
         return output_path
 
@@ -160,6 +204,8 @@ class FaceDetectionService:
                             padding: float = 0.2) -> Image.Image:
         """
         Extract a face region from an image with optional padding.
+
+        Automatically handles EXIF orientation for consistent extraction.
 
         Args:
             image_path: Path to image file
@@ -171,22 +217,23 @@ class FaceDetectionService:
         """
         top, right, bottom, left = bbox
 
-        with Image.open(image_path) as img:
-            width, height = img.size
+        # Load with EXIF rotation
+        img = load_image_with_exif_rotation(image_path)
+        width, height = img.size
 
-            # Calculate padding
-            face_width = right - left
-            face_height = bottom - top
-            pad_x = int(face_width * padding)
-            pad_y = int(face_height * padding)
+        # Calculate padding
+        face_width = right - left
+        face_height = bottom - top
+        pad_x = int(face_width * padding)
+        pad_y = int(face_height * padding)
 
-            # Apply padding with bounds checking
-            new_left = max(0, left - pad_x)
-            new_top = max(0, top - pad_y)
-            new_right = min(width, right + pad_x)
-            new_bottom = min(height, bottom + pad_y)
+        # Apply padding with bounds checking
+        new_left = max(0, left - pad_x)
+        new_top = max(0, top - pad_y)
+        new_right = min(width, right + pad_x)
+        new_bottom = min(height, bottom + pad_y)
 
-            # Crop
-            face_img = img.crop((new_left, new_top, new_right, new_bottom))
+        # Crop
+        face_img = img.crop((new_left, new_top, new_right, new_bottom))
 
-            return face_img.copy()
+        return face_img.copy()

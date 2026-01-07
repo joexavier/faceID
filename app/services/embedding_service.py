@@ -5,6 +5,8 @@ import os
 import urllib.request
 import logging
 
+from app.services.face_detection import load_image_with_exif_rotation
+
 logger = logging.getLogger('faceID.embedding')
 
 
@@ -101,6 +103,8 @@ class EmbeddingService:
         """
         Extract 128D embedding for a single face.
 
+        Automatically handles EXIF orientation for consistent embeddings.
+
         Args:
             image_path: Path to image file
             face_location: Optional face location (top, right, bottom, left)
@@ -108,7 +112,16 @@ class EmbeddingService:
         Returns:
             128-dimensional numpy array or None if no face found
         """
-        image = cv2.imread(image_path)
+        # Load image with EXIF rotation applied
+        pil_img = load_image_with_exif_rotation(image_path)
+
+        # Convert to RGB if necessary
+        if pil_img.mode != 'RGB':
+            pil_img = pil_img.convert('RGB')
+
+        # Convert PIL to OpenCV format (BGR)
+        image = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
         if image is None:
             return None
 
