@@ -613,6 +613,48 @@ body {
     gap: 1rem;
 }
 
+/* Radio / Algorithm Toggle */
+.algorithm-toggle {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.radio-label {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    background: var(--gray-100);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.radio-label:hover {
+    background: var(--gray-200);
+}
+
+.radio-label input[type="radio"] {
+    margin-top: 3px;
+}
+
+.radio-label input[type="radio"]:checked + strong {
+    color: var(--primary);
+}
+
+/* Algorithm badge in gallery */
+.algorithm-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    background: var(--primary);
+    color: white;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+
 /* Filters */
 .filters {
     display: flex;

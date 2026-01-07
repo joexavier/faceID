@@ -23,6 +23,20 @@
     <h2>Scan Settings</h2>
 
     <div class="form-group">
+        <label>Algorithm:</label>
+        <div class="algorithm-toggle">
+            <label class="radio-label">
+                <input type="radio" name="algorithm" value="centroid" checked>
+                <strong>Centroid</strong> - Distance to mean embedding (current)
+            </label>
+            <label class="radio-label">
+                <input type="radio" name="algorithm" value="template">
+                <strong>Template Matcher</strong> - Multi-threshold cosine similarity (iOS-style)
+            </label>
+        </div>
+    </div>
+
+    <div class="form-group">
         <label>Select folders to scan:</label>
         <div class="folder-checkboxes">
             <label class="checkbox-label">
@@ -84,7 +98,6 @@
 {% block scripts %}
 <script>
     const personId = {{ person.id if person else 'null' }};
-    const classifierId = {{ classifier.id if classifier else 'null' }};
 
     function toggleAllFolders() {
         const allChecked = document.getElementById('allFolders').checked;
@@ -99,9 +112,13 @@
         const summary = document.getElementById('resultsSummary');
 
         btn.disabled = true;
-        btn.textContent = 'Scanning...';
         progress.style.display = 'block';
         summary.style.display = 'none';
+
+        // Get selected algorithm
+        const algorithm = document.querySelector('input[name="algorithm"]:checked').value;
+        btn.textContent = `Training ${algorithm} model...`;
+        document.getElementById('scanProgressText').textContent = `Training ${algorithm} classifier...`;
 
         // Get selected folders
         const allFolders = document.getElementById('allFolders').checked;
@@ -114,6 +131,21 @@
         }
 
         try {
+            // First train the classifier with selected algorithm
+            const trainResult = await api.post(`/api/persons/${personId}/train`, {
+                algorithm: algorithm
+            });
+
+            if (trainResult.error) {
+                throw new Error(trainResult.error);
+            }
+
+            const classifierId = trainResult.id;
+            btn.textContent = 'Scanning photos...';
+            document.getElementById('scanProgressText').textContent = 'Scanning photos...';
+            document.getElementById('scanProgressBar').style.width = '50%';
+
+            // Now scan with the new classifier
             const result = await api.post('/api/scan', {
                 classifier_id: classifierId,
                 folder: folder
@@ -122,7 +154,7 @@
             document.getElementById('totalPhotos').textContent = result.total_photos;
             document.getElementById('matchedPhotos').textContent = result.photos_with_matches;
             document.getElementById('scanProgressBar').style.width = '100%';
-            document.getElementById('scanProgressText').textContent = 'Scan complete!';
+            document.getElementById('scanProgressText').textContent = `Scan complete! (${algorithm} algorithm)`;
 
             summary.style.display = 'block';
         } catch (err) {

@@ -306,6 +306,216 @@ class KNNClassifier(BaseClassifier):
         return instance
 
 
+class TemplateMatcherClassifier(BaseClassifier):
+    """
+    Template-based face matcher using cosine similarity.
+
+    Based on iOS on-device face identification spec:
+    - Stores individual templates (up to 10)
+    - Uses cosine similarity with L2-normalized embeddings
+    - Multi-threshold matching: s_max, s_mu, s_top2_mean
+    - Adaptive threshold calibration
+    - Precision > recall (conservative matching)
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.templates = None  # Individual template embeddings
+        self.mean_template = None  # Mean embedding (μ)
+        self.t_high = 0.7  # High confidence threshold for s_max
+        self.t_mu = 0.6  # Threshold for mean similarity
+        self.t_top2 = 0.55  # Threshold for top-2 mean
+        self.template_std = 0.0  # Std dev of inter-template similarities
+
+    def _normalize(self, embedding: np.ndarray) -> np.ndarray:
+        """L2 normalize embedding"""
+        norm = np.linalg.norm(embedding)
+        if norm > 0:
+            return embedding / norm
+        return embedding
+
+    def _cosine_similarity(self, e1: np.ndarray, e2: np.ndarray) -> float:
+        """Compute cosine similarity between two embeddings"""
+        e1_norm = self._normalize(e1)
+        e2_norm = self._normalize(e2)
+        return float(np.dot(e1_norm, e2_norm))
+
+    def train(self, positive_embeddings: List[np.ndarray],
+              negative_embeddings: List[np.ndarray] = None) -> Dict:
+        """
+        Train by storing templates and calibrating thresholds.
+
+        During enrollment:
+        - Store up to 10 templates
+        - Compute mean template
+        - Calibrate thresholds based on template similarity distribution
+        """
+        if not positive_embeddings:
+            raise ValueError("Need at least one positive example")
+
+        # Limit to 10 templates as per spec
+        templates = positive_embeddings[:10]
+
+        # L2 normalize all templates
+        self.templates = np.array([self._normalize(e) for e in templates])
+
+        # Compute mean template
+        self.mean_template = self._normalize(np.mean(self.templates, axis=0))
+
+        # Calibrate thresholds based on inter-template similarities
+        self._calibrate_thresholds()
+
+        self.is_trained = True
+
+        return {
+            'num_positive': len(templates),
+            'num_negative': len(negative_embeddings) if negative_embeddings else 0,
+            'algorithm': 'template',
+            't_high': self.t_high,
+            't_mu': self.t_mu,
+            't_top2': self.t_top2
+        }
+
+    def _calibrate_thresholds(self):
+        """
+        Calibrate thresholds based on template similarity distribution.
+
+        Set T_MU = mean - k*std (clamped) for conservative matching.
+        """
+        if len(self.templates) < 2:
+            # Can't calibrate with single template, use defaults
+            return
+
+        # Compute pairwise similarities between templates
+        similarities = []
+        for i in range(len(self.templates)):
+            for j in range(i + 1, len(self.templates)):
+                sim = self._cosine_similarity(self.templates[i], self.templates[j])
+                similarities.append(sim)
+
+        # Also compute similarity of each template to mean
+        mean_similarities = []
+        for t in self.templates:
+            sim = self._cosine_similarity(t, self.mean_template)
+            mean_similarities.append(sim)
+
+        # Statistics
+        mean_sim = np.mean(similarities)
+        std_sim = np.std(similarities)
+        self.template_std = std_sim
+
+        min_mean_sim = min(mean_similarities)
+
+        # Calibrate thresholds (conservative - precision > recall)
+        # T_HIGH: should be achievable by good matches
+        self.t_high = max(0.6, min(0.85, mean_sim - 0.5 * std_sim))
+
+        # T_MU: based on worst template-to-mean similarity with margin
+        self.t_mu = max(0.5, min(0.75, min_mean_sim - 1.5 * std_sim))
+
+        # T_TOP2: slightly lower than t_mu
+        self.t_top2 = max(0.45, self.t_mu - 0.1)
+
+    def predict(self, embedding: np.ndarray,
+                quality_score: Optional[float] = None) -> Tuple[bool, float]:
+        """
+        Match using multi-threshold logic.
+
+        Compute:
+        - s_max = max similarity to any template
+        - s_mu = similarity to mean template
+        - s_top2_mean = mean of top 2 template similarities
+
+        Accept if:
+        (s_max >= T_HIGH) OR (s_mu >= T_MU AND s_top2_mean >= T_TOP2)
+        """
+        if not self.is_trained:
+            raise ValueError("Classifier not trained")
+
+        # Normalize candidate embedding
+        e_norm = self._normalize(embedding)
+
+        # Compute similarity to all templates
+        similarities = [float(np.dot(e_norm, t)) for t in self.templates]
+
+        # s_max: best match to any template
+        s_max = max(similarities)
+
+        # s_mu: similarity to mean template
+        s_mu = float(np.dot(e_norm, self.mean_template))
+
+        # s_top2_mean: mean of top 2 similarities
+        sorted_sims = sorted(similarities, reverse=True)
+        s_top2_mean = np.mean(sorted_sims[:min(2, len(sorted_sims))])
+
+        # Multi-threshold matching logic (precision > recall)
+        is_match = (
+            (s_max >= self.t_high) or
+            (s_mu >= self.t_mu and s_top2_mean >= self.t_top2)
+        )
+
+        # Return s_max as the primary score
+        return is_match, s_max
+
+    def predict_detailed(self, embedding: np.ndarray) -> Dict:
+        """
+        Return detailed matching information for debugging/display.
+        """
+        if not self.is_trained:
+            raise ValueError("Classifier not trained")
+
+        e_norm = self._normalize(embedding)
+        similarities = [float(np.dot(e_norm, t)) for t in self.templates]
+
+        s_max = max(similarities)
+        s_mu = float(np.dot(e_norm, self.mean_template))
+        sorted_sims = sorted(similarities, reverse=True)
+        s_top2_mean = np.mean(sorted_sims[:min(2, len(sorted_sims))])
+
+        is_match = (
+            (s_max >= self.t_high) or
+            (s_mu >= self.t_mu and s_top2_mean >= self.t_top2)
+        )
+
+        return {
+            'is_match': is_match,
+            's_max': s_max,
+            's_mu': s_mu,
+            's_top2_mean': s_top2_mean,
+            't_high': self.t_high,
+            't_mu': self.t_mu,
+            't_top2': self.t_top2,
+            'match_reason': 'high_confidence' if s_max >= self.t_high else
+                           ('multi_threshold' if is_match else 'no_match'),
+            'all_similarities': similarities
+        }
+
+    def save(self, path: str):
+        """Save model to disk"""
+        joblib.dump({
+            'templates': self.templates,
+            'mean_template': self.mean_template,
+            't_high': self.t_high,
+            't_mu': self.t_mu,
+            't_top2': self.t_top2,
+            'template_std': self.template_std
+        }, path)
+
+    @classmethod
+    def load(cls, path: str) -> 'TemplateMatcherClassifier':
+        """Load model from disk"""
+        data = joblib.load(path)
+        instance = cls()
+        instance.templates = data['templates']
+        instance.mean_template = data['mean_template']
+        instance.t_high = data['t_high']
+        instance.t_mu = data['t_mu']
+        instance.t_top2 = data['t_top2']
+        instance.template_std = data.get('template_std', 0.0)
+        instance.is_trained = True
+        return instance
+
+
 def create_classifier(algorithm: str) -> BaseClassifier:
     """Factory function to create classifiers"""
     if algorithm == 'svm':
@@ -314,6 +524,8 @@ def create_classifier(algorithm: str) -> BaseClassifier:
         return CentroidClassifier()
     elif algorithm == 'knn':
         return KNNClassifier()
+    elif algorithm == 'template':
+        return TemplateMatcherClassifier()
     else:
         raise ValueError(f"Unknown algorithm: {algorithm}")
 
@@ -329,6 +541,8 @@ def load_classifier(classifier_model: Classifier) -> BaseClassifier:
         return CentroidClassifier.load(classifier_model.model_path)
     elif classifier_model.algorithm == 'knn':
         return KNNClassifier.load(classifier_model.model_path)
+    elif classifier_model.algorithm == 'template':
+        return TemplateMatcherClassifier.load(classifier_model.model_path)
     else:
         raise ValueError(f"Unknown algorithm: {classifier_model.algorithm}")
 
