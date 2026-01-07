@@ -98,6 +98,8 @@
 {% block scripts %}
 <script>
     const personId = {{ person.id if person else 'null' }};
+    const existingClassifierId = {{ classifier.id if classifier else 'null' }};
+    const existingAlgorithm = "{{ classifier.algorithm if classifier else '' }}";
 
     function toggleAllFolders() {
         const allChecked = document.getElementById('allFolders').checked;
@@ -117,8 +119,6 @@
 
         // Get selected algorithm
         const algorithm = document.querySelector('input[name="algorithm"]:checked').value;
-        btn.textContent = `Training ${algorithm} model...`;
-        document.getElementById('scanProgressText').textContent = `Training ${algorithm} classifier...`;
 
         // Get selected folders
         const allFolders = document.getElementById('allFolders').checked;
@@ -131,21 +131,31 @@
         }
 
         try {
-            // First train the classifier with selected algorithm
-            const trainResult = await api.post(`/api/persons/${personId}/train`, {
-                algorithm: algorithm
-            });
+            let classifierId;
 
-            if (trainResult.error) {
-                throw new Error(trainResult.error);
+            // Only retrain if algorithm changed or no existing classifier
+            if (algorithm !== existingAlgorithm || !existingClassifierId) {
+                btn.textContent = `Training ${algorithm} model...`;
+                document.getElementById('scanProgressText').textContent = `Training ${algorithm} classifier...`;
+
+                const trainResult = await api.post(`/api/persons/${personId}/train`, {
+                    algorithm: algorithm
+                });
+
+                if (trainResult.error) {
+                    throw new Error(trainResult.error);
+                }
+                classifierId = trainResult.id;
+            } else {
+                // Use existing classifier
+                classifierId = existingClassifierId;
             }
 
-            const classifierId = trainResult.id;
             btn.textContent = 'Scanning photos...';
             document.getElementById('scanProgressText').textContent = 'Scanning photos...';
             document.getElementById('scanProgressBar').style.width = '50%';
 
-            // Now scan with the new classifier
+            // Now scan
             const result = await api.post('/api/scan', {
                 classifier_id: classifierId,
                 folder: folder
