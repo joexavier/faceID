@@ -356,6 +356,20 @@ def train_classifier(person_id):
     person = Person.query.get_or_404(person_id)
     data = request.get_json() or {}
     algorithm = data.get('algorithm', 'svm')
+    force_retrain = data.get('force_retrain', False)
+
+    # Check if we already have a classifier with this algorithm
+    existing = Classifier.query.filter_by(
+        person_id=person_id,
+        algorithm=algorithm
+    ).first()
+
+    if existing and not force_retrain:
+        # Just activate the existing classifier and return it
+        Classifier.query.filter_by(person_id=person_id).update({'is_active': False})
+        existing.is_active = True
+        db.session.commit()
+        return jsonify(existing.to_dict())
 
     # Get positive examples
     positive_examples = FaceExample.query.filter_by(
@@ -402,19 +416,28 @@ def train_classifier(person_id):
     # Deactivate other classifiers for this person
     Classifier.query.filter_by(person_id=person_id).update({'is_active': False})
 
-    # Save to database
-    classifier = Classifier(
-        person_id=person_id,
-        algorithm=algorithm,
-        model_path=model_path,
-        num_training_examples=len(positive_embeddings),
-        num_negative_examples=len(negative_embeddings),
-        is_active=True
-    )
-    db.session.add(classifier)
-    db.session.commit()
-
-    return jsonify(classifier.to_dict()), 201
+    if existing:
+        # Update existing classifier
+        existing.model_path = model_path
+        existing.num_training_examples = len(positive_embeddings)
+        existing.num_negative_examples = len(negative_embeddings)
+        existing.is_active = True
+        existing.created_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify(existing.to_dict())
+    else:
+        # Create new classifier
+        classifier = Classifier(
+            person_id=person_id,
+            algorithm=algorithm,
+            model_path=model_path,
+            num_training_examples=len(positive_embeddings),
+            num_negative_examples=len(negative_embeddings),
+            is_active=True
+        )
+        db.session.add(classifier)
+        db.session.commit()
+        return jsonify(classifier.to_dict()), 201
 
 
 @api_bp.route('/classifiers/<int:classifier_id>/evaluate', methods=['POST'])

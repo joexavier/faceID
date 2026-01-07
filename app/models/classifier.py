@@ -490,6 +490,13 @@ class TemplateMatcherClassifier(BaseClassifier):
             'all_similarities': similarities
         }
 
+    def set_threshold(self, value):
+        """
+        Override to adjust t_high threshold.
+        The database threshold maps to t_high for consistency.
+        """
+        self.t_high = value
+
     def save(self, path: str):
         """Save model to disk"""
         joblib.dump({
@@ -536,15 +543,21 @@ def load_classifier(classifier_model: Classifier) -> BaseClassifier:
         raise ValueError("Classifier model file not found")
 
     if classifier_model.algorithm == 'svm':
-        return SVMClassifier.load(classifier_model.model_path)
+        clf = SVMClassifier.load(classifier_model.model_path)
     elif classifier_model.algorithm == 'centroid':
-        return CentroidClassifier.load(classifier_model.model_path)
+        clf = CentroidClassifier.load(classifier_model.model_path)
     elif classifier_model.algorithm == 'knn':
-        return KNNClassifier.load(classifier_model.model_path)
+        clf = KNNClassifier.load(classifier_model.model_path)
     elif classifier_model.algorithm == 'template':
-        return TemplateMatcherClassifier.load(classifier_model.model_path)
+        clf = TemplateMatcherClassifier.load(classifier_model.model_path)
     else:
         raise ValueError(f"Unknown algorithm: {classifier_model.algorithm}")
+
+    # Apply database threshold if set (overrides model file threshold)
+    if classifier_model.optimal_threshold is not None:
+        clf.set_threshold(classifier_model.optimal_threshold)
+
+    return clf
 
 
 def train_and_save_classifier(person_id: int, algorithm: str,

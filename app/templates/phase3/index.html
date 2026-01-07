@@ -98,8 +98,6 @@
 {% block scripts %}
 <script>
     const personId = {{ person.id if person else 'null' }};
-    const existingClassifierId = {{ classifier.id if classifier else 'null' }};
-    const existingAlgorithm = "{{ classifier.algorithm if classifier else '' }}";
 
     function toggleAllFolders() {
         const allChecked = document.getElementById('allFolders').checked;
@@ -119,6 +117,8 @@
 
         // Get selected algorithm
         const algorithm = document.querySelector('input[name="algorithm"]:checked').value;
+        btn.textContent = `Preparing ${algorithm} classifier...`;
+        document.getElementById('scanProgressText').textContent = `Preparing ${algorithm} classifier...`;
 
         // Get selected folders
         const allFolders = document.getElementById('allFolders').checked;
@@ -131,25 +131,16 @@
         }
 
         try {
-            let classifierId;
+            // Train endpoint now reuses existing classifiers automatically
+            const trainResult = await api.post(`/api/persons/${personId}/train`, {
+                algorithm: algorithm
+            });
 
-            // Only retrain if algorithm changed or no existing classifier
-            if (algorithm !== existingAlgorithm || !existingClassifierId) {
-                btn.textContent = `Training ${algorithm} model...`;
-                document.getElementById('scanProgressText').textContent = `Training ${algorithm} classifier...`;
-
-                const trainResult = await api.post(`/api/persons/${personId}/train`, {
-                    algorithm: algorithm
-                });
-
-                if (trainResult.error) {
-                    throw new Error(trainResult.error);
-                }
-                classifierId = trainResult.id;
-            } else {
-                // Use existing classifier
-                classifierId = existingClassifierId;
+            if (trainResult.error) {
+                throw new Error(trainResult.error);
             }
+
+            const classifierId = trainResult.id;
 
             btn.textContent = 'Scanning photos...';
             document.getElementById('scanProgressText').textContent = 'Scanning photos...';
