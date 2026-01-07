@@ -263,6 +263,10 @@ class PhotoScanner:
             if matches_only and not matches:
                 continue
 
+            # Get best score across all faces (for showing similarity on non-matches too)
+            all_scores = [r.prediction_score for r in photo_results if r.prediction_score is not None]
+            best_score = max(all_scores) if all_scores else None
+
             results.append({
                 'photo': photo.to_dict(),
                 'matches': [{
@@ -272,7 +276,8 @@ class PhotoScanner:
                     'verified': r.user_verified
                 } for r in matches],
                 'total_faces': len(photo_results),
-                'match_count': len(matches)
+                'match_count': len(matches),
+                'best_score': best_score
             })
 
         return results

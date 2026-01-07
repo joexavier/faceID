@@ -53,11 +53,14 @@
         position: absolute;
         top: 10px;
         right: 10px;
-        background: rgba(0,0,0,0.7);
+        background: rgba(40, 167, 69, 0.9);
         color: white;
         padding: 4px 8px;
         border-radius: 4px;
         font-size: 0.75rem;
+    }
+    .gallery-item .confidence.no-match {
+        background: rgba(108, 117, 125, 0.8);
     }
     .folder-section {
         margin-bottom: 2rem;
@@ -162,15 +165,14 @@
         const allPhotosData = await api.get('/api/photos?per_page=500');
         const allPhotos = allPhotosData.photos;
 
-        // Create a map of photo_id -> match info
-        const matchMap = {};
+        // Create a map of photo_id -> scan info (including non-matches)
+        const scanMap = {};
         data.results.forEach(r => {
-            if (r.match_count > 0) {
-                matchMap[r.photo.id] = {
-                    matches: r.matches,
-                    score: r.matches[0]?.score || 0
-                };
-            }
+            scanMap[r.photo.id] = {
+                matches: r.matches,
+                matchCount: r.match_count,
+                bestScore: r.best_score
+            };
         });
 
         // Group all photos by folder
@@ -179,10 +181,11 @@
             if (!byFolder[photo.folder_name]) {
                 byFolder[photo.folder_name] = [];
             }
+            const scanInfo = scanMap[photo.id];
             byFolder[photo.folder_name].push({
                 photo: photo,
-                hasMatch: !!matchMap[photo.id],
-                matchInfo: matchMap[photo.id]
+                hasMatch: scanInfo?.matchCount > 0,
+                bestScore: scanInfo?.bestScore
             });
         });
 
@@ -205,12 +208,12 @@
 
             for (const item of photos) {
                 const hasMatch = item.hasMatch;
-                const score = item.matchInfo?.score;
+                const score = item.bestScore;
 
                 html += `
                     <div class="gallery-item ${hasMatch ? 'has-match' : ''}">
                         <img src="/api/photos/${item.photo.id}/thumbnail?size=300" alt="${item.photo.file_name}">
-                        ${hasMatch && score ? `<div class="confidence">${(score * 100).toFixed(0)}%</div>` : ''}
+                        ${score != null ? `<div class="confidence ${hasMatch ? '' : 'no-match'}">${(score * 100).toFixed(0)}%</div>` : ''}
                         <div class="photo-label">${item.photo.file_name}</div>
                     </div>
                 `;
