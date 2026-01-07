@@ -322,9 +322,9 @@ class TemplateMatcherClassifier(BaseClassifier):
         super().__init__()
         self.templates = None  # Individual template embeddings
         self.mean_template = None  # Mean embedding (μ)
-        self.t_high = 0.7  # High confidence threshold for s_max
-        self.t_mu = 0.6  # Threshold for mean similarity
-        self.t_top2 = 0.55  # Threshold for top-2 mean
+        self.t_high = 0.50  # High confidence threshold for s_max
+        self.t_mu = 0.40  # Threshold for mean similarity
+        self.t_top2 = 0.35  # Threshold for top-2 mean
         self.template_std = 0.0  # Std dev of inter-template similarities
 
     def _normalize(self, embedding: np.ndarray) -> np.ndarray:
@@ -406,15 +406,15 @@ class TemplateMatcherClassifier(BaseClassifier):
 
         min_mean_sim = min(mean_similarities)
 
-        # Calibrate thresholds (conservative - precision > recall)
+        # Calibrate thresholds (balanced - similar recall to centroid)
         # T_HIGH: should be achievable by good matches
-        self.t_high = max(0.6, min(0.85, mean_sim - 0.5 * std_sim))
+        self.t_high = max(0.40, min(0.65, mean_sim - 2.0 * std_sim))
 
         # T_MU: based on worst template-to-mean similarity with margin
-        self.t_mu = max(0.5, min(0.75, min_mean_sim - 1.5 * std_sim))
+        self.t_mu = max(0.30, min(0.55, min_mean_sim - 2.5 * std_sim))
 
         # T_TOP2: slightly lower than t_mu
-        self.t_top2 = max(0.45, self.t_mu - 0.1)
+        self.t_top2 = max(0.25, self.t_mu - 0.1)
 
     def predict(self, embedding: np.ndarray,
                 quality_score: Optional[float] = None) -> Tuple[bool, float]:
