@@ -27,11 +27,15 @@
         <div class="algorithm-toggle">
             <label class="radio-label">
                 <input type="radio" name="algorithm" value="centroid" checked>
-                <strong>Centroid</strong> - Distance to mean embedding (current)
+                <strong>Centroid</strong> - Distance to mean embedding (OpenFace)
             </label>
             <label class="radio-label">
                 <input type="radio" name="algorithm" value="template">
-                <strong>Template Matcher</strong> - Multi-threshold cosine similarity (iOS-style)
+                <strong>Template Matcher</strong> - Multi-threshold cosine similarity (OpenFace)
+            </label>
+            <label class="radio-label">
+                <input type="radio" name="algorithm" value="mobilefacenet">
+                <strong>MobileFaceNet</strong> - L2-normalized cosine similarity (112x112, iOS-optimized)
             </label>
         </div>
     </div>

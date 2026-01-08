@@ -381,31 +381,66 @@ def train_classifier(person_id):
     if len(positive_examples) < 3:
         return jsonify({'error': 'Need at least 3 positive examples'}), 400
 
-    positive_embeddings = [e.detected_face.embedding for e in positive_examples
-                           if e.detected_face.embedding is not None]
+    # For MobileFaceNet, extract embeddings using MobileFaceNet service
+    if algorithm == 'mobilefacenet':
+        from app.services.mobilefacenet_service import MobileFaceNetService
+        mfn_service = MobileFaceNetService()
 
-    # Get negative examples (faces from same photos but not marked as positive)
-    negative_embeddings = []
-    for example in positive_examples:
-        photo = example.detected_face.photo
-        for face in photo.detected_faces:
-            if face.id != example.detected_face_id and face.embedding is not None:
-                # Check if this face is not marked as positive for this person
-                is_positive = FaceExample.query.filter_by(
-                    person_id=person_id,
-                    detected_face_id=face.id,
-                    is_positive=True
-                ).first()
-                if not is_positive:
-                    negative_embeddings.append(face.embedding)
+        positive_embeddings = []
+        for example in positive_examples:
+            face = example.detected_face
+            embedding = mfn_service.extract_embedding(
+                face.photo.file_path,
+                face.effective_bbox
+            )
+            if embedding is not None:
+                positive_embeddings.append(embedding)
 
-    # If not enough negatives, we can still train centroid/knn
+        # Get negative examples using MobileFaceNet embeddings
+        negative_embeddings = []
+        for example in positive_examples:
+            photo = example.detected_face.photo
+            for face in photo.detected_faces:
+                if face.id != example.detected_face_id:
+                    is_positive = FaceExample.query.filter_by(
+                        person_id=person_id,
+                        detected_face_id=face.id,
+                        is_positive=True
+                    ).first()
+                    if not is_positive:
+                        embedding = mfn_service.extract_embedding(
+                            face.photo.file_path,
+                            face.effective_bbox
+                        )
+                        if embedding is not None:
+                            negative_embeddings.append(embedding)
+    else:
+        # Use stored OpenFace embeddings for other algorithms
+        positive_embeddings = [e.detected_face.embedding for e in positive_examples
+                               if e.detected_face.embedding is not None]
+
+        # Get negative examples (faces from same photos but not marked as positive)
+        negative_embeddings = []
+        for example in positive_examples:
+            photo = example.detected_face.photo
+            for face in photo.detected_faces:
+                if face.id != example.detected_face_id and face.embedding is not None:
+                    # Check if this face is not marked as positive for this person
+                    is_positive = FaceExample.query.filter_by(
+                        person_id=person_id,
+                        detected_face_id=face.id,
+                        is_positive=True
+                    ).first()
+                    if not is_positive:
+                        negative_embeddings.append(face.embedding)
+
+    # If not enough negatives, we can still train centroid/knn/mobilefacenet
     if algorithm == 'svm' and len(negative_embeddings) < 1:
         return jsonify({'error': 'Need negative examples for SVM. Use centroid or knn algorithm.'}), 400
 
     # Train and save
     try:
-        clf, model_path = train_and_save_classifier(
+        clf, model_path, training_info = train_and_save_classifier(
             person_id, algorithm,
             positive_embeddings, negative_embeddings,
             current_app.config['MODELS_DIR']
@@ -424,7 +459,7 @@ def train_classifier(person_id):
         existing.is_active = True
         existing.created_at = datetime.utcnow()
         db.session.commit()
-        return jsonify(existing.to_dict())
+        result = existing.to_dict()
     else:
         # Create new classifier
         classifier = Classifier(
@@ -437,7 +472,14 @@ def train_classifier(person_id):
         )
         db.session.add(classifier)
         db.session.commit()
-        return jsonify(classifier.to_dict()), 201
+        result = classifier.to_dict()
+
+    # Add training info to result
+    result['training_info'] = training_info
+    if training_info.get('quality_warning'):
+        result['quality_warning'] = training_info['quality_warning']
+
+    return jsonify(result), 201 if not existing else 200
 
 
 @api_bp.route('/classifiers/<int:classifier_id>/evaluate', methods=['POST'])

@@ -25,6 +25,10 @@ data/models/*.caffemodel
 data/models/*.prototxt
 data/models/*.t7
 data/models/*.joblib
+data/models/*.mlpackage
+data/models/*.mlmodelc
+data/models/*.onnx
+data/models/*.pt
 app/static/thumbnails/
 
 # Environment

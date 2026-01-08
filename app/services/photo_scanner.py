@@ -174,6 +174,12 @@ class PhotoScanner:
         # Load the classifier model
         clf = load_classifier(classifier)
 
+        # For MobileFaceNet, we need to extract embeddings using MobileFaceNet service
+        mfn_service = None
+        if classifier.algorithm == 'mobilefacenet':
+            from app.services.mobilefacenet_service import MobileFaceNetService
+            mfn_service = MobileFaceNetService()
+
         # Get photos to scan
         query = Photo.query
         if folder:
@@ -190,10 +196,21 @@ class PhotoScanner:
             # Check each face
             matches = []
             for face in photo.detected_faces:
-                if face.embedding is None:
-                    continue
+                # For MobileFaceNet, extract embedding on-the-fly
+                if mfn_service is not None:
+                    embedding = mfn_service.extract_embedding(
+                        photo.file_path,
+                        face.effective_bbox
+                    )
+                    if embedding is None:
+                        continue
+                else:
+                    # Use stored OpenFace embedding
+                    if face.embedding is None:
+                        continue
+                    embedding = face.embedding
 
-                is_match, score = clf.predict(face.embedding)
+                is_match, score = clf.predict(embedding)
 
                 # Save result
                 result = ScanResult(

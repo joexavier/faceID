@@ -523,6 +523,212 @@ class TemplateMatcherClassifier(BaseClassifier):
         return instance
 
 
+class MobileFaceNetClassifier(BaseClassifier):
+    """
+    MobileFaceNet-based face classifier.
+
+    Uses InsightFace w600k_mbf model (CoreML):
+    - 512-D L2-normalized embeddings
+    - Cosine similarity matching (dot product for L2-normalized vectors)
+    - Thresholds: >= 0.4 definitive match, 0.3-0.39 probable match
+
+    Note: This classifier uses its own embedding extraction (MobileFaceNet)
+    rather than the default OpenFace embeddings.
+    """
+
+    # Matching thresholds for InsightFace model
+    THRESHOLD_DEFINITIVE = 0.4  # Score >= 0.4: Definitive match
+    THRESHOLD_PROBABLE = 0.3    # Score 0.3-0.39: Probable match
+
+    def __init__(self):
+        super().__init__()
+        self.templates = None  # L2-normalized template embeddings
+        self.mean_template = None  # L2-normalized mean embedding (centroid)
+        self.threshold = self.THRESHOLD_PROBABLE  # Default to probable match threshold
+        self._embedding_service = None
+
+    def _get_embedding_service(self):
+        """Lazy-load MobileFaceNet embedding service"""
+        if self._embedding_service is None:
+            from app.services.mobilefacenet_service import MobileFaceNetService
+            self._embedding_service = MobileFaceNetService()
+        return self._embedding_service
+
+    def _normalize(self, embedding: np.ndarray) -> np.ndarray:
+        """L2 normalize embedding to unit length"""
+        norm = np.linalg.norm(embedding)
+        if norm > 0:
+            return embedding / norm
+        return embedding
+
+    def _cosine_similarity(self, e1: np.ndarray, e2: np.ndarray) -> float:
+        """
+        Compute cosine similarity between two L2-normalized embeddings.
+        For L2-normalized vectors, cosine similarity = dot product.
+        """
+        return float(np.dot(e1, e2))
+
+    def train(self, positive_embeddings: List[np.ndarray],
+              negative_embeddings: List[np.ndarray] = None) -> Dict:
+        """
+        Train by storing L2-normalized templates and computing centroid.
+
+        Based on spec Phase 1 (Enrollment):
+        - Store templates (up to 10 for memory efficiency)
+        - Compute centroid: V_avg = mean of all templates
+        - L2-normalize centroid: V_ref = V_avg / ||V_avg||
+        """
+        if not positive_embeddings:
+            raise ValueError("Need at least one positive example")
+
+        # Store up to 10 templates (spec recommends 5, we allow up to 10)
+        templates = positive_embeddings[:10]
+
+        # L2 normalize all templates
+        self.templates = np.array([self._normalize(e) for e in templates])
+
+        # Quality check: compute pairwise similarities between positive examples
+        # Low similarity suggests different people were selected
+        pairwise_sims = []
+        quality_warning = None
+        if len(self.templates) >= 2:
+            for i in range(len(self.templates)):
+                for j in range(i + 1, len(self.templates)):
+                    sim = self._cosine_similarity(self.templates[i], self.templates[j])
+                    pairwise_sims.append(sim)
+
+            min_pairwise = min(pairwise_sims)
+            avg_pairwise = float(np.mean(pairwise_sims))
+
+            # Warning thresholds based on InsightFace model characteristics
+            if min_pairwise < 0.2:
+                quality_warning = f"WARNING: Very low similarity ({min_pairwise:.2f}) between some examples. They may be different people!"
+            elif avg_pairwise < 0.35:
+                quality_warning = f"WARNING: Low average similarity ({avg_pairwise:.2f}) between examples. Check if all are the same person."
+
+        # Compute centroid (master embedding) as per spec
+        # V_avg = (1/n) * sum(v_i)
+        centroid_raw = np.mean(self.templates, axis=0)
+        # L2 normalize: V_ref = V_avg / ||V_avg||
+        self.mean_template = self._normalize(centroid_raw)
+
+        self.is_trained = True
+
+        # Compute some statistics for training info
+        template_similarities = []
+        for t in self.templates:
+            sim = self._cosine_similarity(t, self.mean_template)
+            template_similarities.append(sim)
+
+        result = {
+            'num_positive': len(templates),
+            'num_negative': len(negative_embeddings) if negative_embeddings else 0,
+            'algorithm': 'mobilefacenet',
+            'threshold': self.threshold,
+            'mean_template_similarity': float(np.mean(template_similarities)),
+            'min_template_similarity': float(min(template_similarities)),
+            'pairwise_min': float(min(pairwise_sims)) if pairwise_sims else None,
+            'pairwise_avg': float(np.mean(pairwise_sims)) if pairwise_sims else None
+        }
+
+        if quality_warning:
+            result['quality_warning'] = quality_warning
+
+        return result
+
+    def predict(self, embedding: np.ndarray) -> Tuple[bool, float]:
+        """
+        Match using cosine similarity with MobileFaceNet thresholds.
+
+        Returns:
+            Tuple of (is_match, similarity_score)
+            - is_match: True if score >= threshold
+            - similarity_score: Cosine similarity to centroid [0, 1]
+        """
+        if not self.is_trained:
+            raise ValueError("Classifier not trained")
+
+        # L2 normalize candidate embedding
+        e_norm = self._normalize(embedding)
+
+        # Compute cosine similarity to centroid (master embedding)
+        # For L2-normalized vectors, this is just the dot product
+        score = self._cosine_similarity(e_norm, self.mean_template)
+
+        # Match if score >= threshold
+        is_match = score >= self.threshold
+
+        return is_match, score
+
+    def predict_detailed(self, embedding: np.ndarray) -> Dict:
+        """
+        Return detailed matching information.
+
+        Provides match type based on thresholds:
+        - "definitive": score >= 0.4
+        - "probable": score 0.3-0.39
+        - "no_match": score < 0.3
+        """
+        if not self.is_trained:
+            raise ValueError("Classifier not trained")
+
+        e_norm = self._normalize(embedding)
+
+        # Similarity to centroid
+        centroid_score = self._cosine_similarity(e_norm, self.mean_template)
+
+        # Similarities to all templates
+        template_similarities = [self._cosine_similarity(e_norm, t) for t in self.templates]
+        max_template_score = max(template_similarities)
+        avg_template_score = float(np.mean(template_similarities))
+
+        # Determine match type based on spec thresholds
+        if centroid_score >= self.THRESHOLD_DEFINITIVE:
+            match_type = "definitive"
+        elif centroid_score >= self.THRESHOLD_PROBABLE:
+            match_type = "probable"
+        else:
+            match_type = "no_match"
+
+        is_match = centroid_score >= self.threshold
+
+        return {
+            'is_match': is_match,
+            'score': centroid_score,
+            'match_type': match_type,
+            'centroid_similarity': centroid_score,
+            'max_template_similarity': max_template_score,
+            'avg_template_similarity': avg_template_score,
+            'threshold': self.threshold,
+            'threshold_definitive': self.THRESHOLD_DEFINITIVE,
+            'threshold_probable': self.THRESHOLD_PROBABLE,
+            'all_template_similarities': template_similarities
+        }
+
+    def set_threshold(self, value):
+        """Update decision threshold"""
+        self.threshold = value
+
+    def save(self, path: str):
+        """Save model to disk"""
+        joblib.dump({
+            'templates': self.templates,
+            'mean_template': self.mean_template,
+            'threshold': self.threshold
+        }, path)
+
+    @classmethod
+    def load(cls, path: str) -> 'MobileFaceNetClassifier':
+        """Load model from disk"""
+        data = joblib.load(path)
+        instance = cls()
+        instance.templates = data['templates']
+        instance.mean_template = data['mean_template']
+        instance.threshold = data.get('threshold', cls.THRESHOLD_PROBABLE)
+        instance.is_trained = True
+        return instance
+
+
 def create_classifier(algorithm: str) -> BaseClassifier:
     """Factory function to create classifiers"""
     if algorithm == 'svm':
@@ -533,6 +739,8 @@ def create_classifier(algorithm: str) -> BaseClassifier:
         return KNNClassifier()
     elif algorithm == 'template':
         return TemplateMatcherClassifier()
+    elif algorithm == 'mobilefacenet':
+        return MobileFaceNetClassifier()
     else:
         raise ValueError(f"Unknown algorithm: {algorithm}")
 
@@ -550,6 +758,8 @@ def load_classifier(classifier_model: Classifier) -> BaseClassifier:
         clf = KNNClassifier.load(classifier_model.model_path)
     elif classifier_model.algorithm == 'template':
         clf = TemplateMatcherClassifier.load(classifier_model.model_path)
+    elif classifier_model.algorithm == 'mobilefacenet':
+        clf = MobileFaceNetClassifier.load(classifier_model.model_path)
     else:
         raise ValueError(f"Unknown algorithm: {classifier_model.algorithm}")
 
@@ -563,19 +773,19 @@ def load_classifier(classifier_model: Classifier) -> BaseClassifier:
 def train_and_save_classifier(person_id: int, algorithm: str,
                                positive_embeddings: List[np.ndarray],
                                negative_embeddings: List[np.ndarray],
-                               models_dir: str) -> Tuple[BaseClassifier, str]:
+                               models_dir: str) -> Tuple[BaseClassifier, str, Dict]:
     """
     Train a classifier and save it to disk.
 
     Returns:
-        Tuple of (classifier instance, model path)
+        Tuple of (classifier instance, model path, training_info)
     """
     clf = create_classifier(algorithm)
-    metrics = clf.train(positive_embeddings, negative_embeddings)
+    training_info = clf.train(positive_embeddings, negative_embeddings)
 
     # Save model
     os.makedirs(models_dir, exist_ok=True)
     model_path = os.path.join(models_dir, f"classifier_person{person_id}_{algorithm}.joblib")
     clf.save(model_path)
 
-    return clf, model_path
+    return clf, model_path, training_info
